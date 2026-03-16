@@ -1,0 +1,18 @@
+version: '3.8'
+
+services:
+  db-agent:
+    build: .
+    container_name: db-intelligence-agent
+    volumes:
+      - ./.env:/app/.env
+      - ./snapshots:/app/snapshots
+      - ./state:/app/state
+      - ./reports:/app/reports
+      - ./.cache:/app/.cache
+    environment:
+      - PYTHONUNBUFFERED=1
+      - TZ=Asia/Kolkata
+    # Interactive mode for chat if needed, though usually used for services
+    stdin_open: true
+    tty: true
