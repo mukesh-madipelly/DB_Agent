@@ -71,29 +71,84 @@ def _get_alias(row: Dict[str, Any], targets: List[str], default: Any = "") -> An
 
 async def _run_sql_async(sql: str, tool_context: ToolContext) -> List[Dict[str, Any]]:
     """Execute a read-only SELECT and return rows as dicts (timestamps → ISO str)."""
-    from .connection_tools import get_async_database_pool
-
+    import config
+    import re
     sql = sql.strip().rstrip(";")
-    
+
+    # For Snowflake, match identifiers to schema capitalization
+    if getattr(config, "DB_TYPE", "").lower() == "snowflake":
+        import json
+        schema = None
+        original_sql = sql
+        
+        # Load schema from tool_context state first
+        if hasattr(tool_context, "state") and tool_context.state.get("schema"):
+            schema = tool_context.state["schema"]
+        # Fall back to session state manager
+        if not schema:
+            try:
+                from adk_agents.state_manager import get_active_session_id, get_state_manager
+                session_id = getattr(tool_context, "session_id", None) or get_active_session_id()
+                if session_id:
+                    state = get_state_manager().load_state(session_id) or {}
+                    schema = state.get("schema")
+            except Exception:
+                pass
+        # Fall back to snapshot file
+        if not schema and hasattr(config, "SNAPSHOT_ROOT"):
+            import os
+            db_identity = _get_db_identity()
+            snapshot_root = getattr(config, "SNAPSHOT_ROOT", "snapshots")
+            snapshot_dir = os.path.join(snapshot_root, db_identity)
+            snapshot_path = os.path.join(snapshot_dir, "schema_snapshot.json")
+            try:
+                with open(snapshot_path, "r") as f:
+                    schema = json.load(f).get("schema")
+            except Exception as e:
+                pass
+        
+        if schema:
+            # Build a case-insensitive mapping for faster lookup
+            col_map = {}  # lowercase_ident -> actual_name
+            for tbl, info in schema.items():
+                col_map[tbl.lower()] = tbl  # table name mapping
+                for col in info.get("columns", []):
+                    col_map[col["name"].lower()] = col["name"]
+            
+            def replace_identifiers(match):
+                ident = match.group(0)
+                # Skip SQL keywords
+                keywords = {"SELECT", "FROM", "WHERE", "AND", "OR", "NOT", "IN", "EXISTS", "UNION", "ORDER", "BY", "GROUP", "HAVING", "LIMIT", "OFFSET", "AS", "ON", "JOIN", "LEFT", "RIGHT", "INNER", "OUTER", "CROSS", "WITH", "CASE", "WHEN", "THEN", "ELSE", "END", "DISTINCT", "ALL"}
+                if ident.upper() in keywords:
+                    return ident
+                # Look up in case-insensitive mapping and wrap in double quotes for Snowflake
+                if ident.lower() in col_map:
+                    return f'"{col_map[ident.lower()]}"'
+                return ident
+            
+            sql = re.sub(r'\b([A-Za-z_][A-Za-z0-9_]*)\b', replace_identifiers, sql)
+        else:
+            print(f"   [LLM SQL] ⚠️ Schema not found for Snowflake identifier mapping", file=__import__('sys').stderr)
+        
+        # No longer stripping quotes; Snowflake handles them correctly if matched to schema.
+        pass
+
     # Strict Read-Only Check
-    # Disallow anything that isn't a SELECT or WITH (for CTEs)
-    clean_sql = re.sub(r'--.*$', '', sql, flags=re.MULTILINE) # remove comments
+    clean_sql = re.sub(r'--.*$', '', sql, flags=re.MULTILINE)
     if not re.match(r"^\s*(SELECT|WITH)\b", clean_sql, re.IGNORECASE):
         raise ValueError(f"Forbidden: Only SELECT or WITH queries allowed. Got: {sql[:80]}")
-        
-    # Block destructive keywords even if nested
     destructive = ["INSERT", "UPDATE", "DELETE", "DROP", "TRUNCATE", "ALTER", "GRANT", "REVOKE"]
     for word in destructive:
         if re.search(fr"\b{word}\b", clean_sql, re.IGNORECASE):
             raise ValueError(f"Forbidden: Destructive keyword '{word}' detected in query.")
 
+    db_type = getattr(config, "DB_TYPE", "").lower()
+    if db_type == "postgresql":
+        from .connection_tools import get_async_database_pool
         pool = await get_async_database_pool(tool_context)
         async with pool.acquire() as conn:
             try:
-                # Enforce read-only transaction if supported (PostgreSQL)
-                # Snowflake handles this via permissions, but we add an extra layer here
-                if getattr(config, "DB_TYPE", "").lower() == "postgresql":
-                    await conn.execute("SET TRANSACTION READ ONLY")
+                await conn.execute("SET TRANSACTION READ ONLY")
                 rows = await conn.fetch(sql)
                 processed_rows = []
                 for row in rows:
@@ -106,6 +161,30 @@ async def _run_sql_async(sql: str, tool_context: ToolContext) -> List[Dict[str, 
             except Exception as e:
                 from adk_agents.tools.error_utils import log_and_raise_connection_error
                 log_and_raise_connection_error("SQL execution failed in LLM insights tool", e)
+    elif db_type == "snowflake":
+        from .connection_tools import get_database_connection
+        sync_conn = get_database_connection(tool_context)
+        cursor = sync_conn.cursor()
+        try:
+            cursor.execute(sql)
+            rows = cursor.fetchall()
+            processed_rows = []
+            column_names = [desc[0] for desc in cursor.description]
+            for row in rows:
+                r_dict = dict(zip(column_names, row))
+                for k, v in r_dict.items():
+                    if hasattr(v, "isoformat"):
+                        r_dict[k] = v.isoformat()
+                processed_rows.append(r_dict)
+            return processed_rows
+        except Exception as e:
+            from adk_agents.tools.error_utils import log_and_raise_connection_error
+            log_and_raise_connection_error("SQL execution failed in LLM insights tool", e)
+        finally:
+            cursor.close()
+            sync_conn.close()
+    else:
+        raise ValueError(f"Unsupported DB_TYPE: {db_type}")
 
 
 def _llm_client_model():
@@ -225,6 +304,10 @@ async def generate_business_insights(tool_context: ToolContext) -> dict:
         # ------------------------------------------------------------------
         # Stage 1: Discovery Plan
         # ------------------------------------------------------------------
+        if db_type.lower() == "snowflake":
+            prompt_quote_rule = "2. Do NOT use double-quoted identifiers for tables/columns. Use plain names."
+        else:
+            prompt_quote_rule = "2. Use double-quoted identifiers for tables/columns."
         discovery_prompt = f"""You are a senior data architect for {db_type}.
 Based on the database schema below and the user's business goal, identify 2-3 specific SQL queries that would provide the most value.
 
@@ -232,9 +315,10 @@ User Goal: {goal}
 
 Rules:
 1. ONLY produce SELECT queries.
-2. Use double-quoted identifiers for tables/columns.
-3. Keep queries efficient.
-4. Return a JSON object with a 'plan' array:
+{prompt_quote_rule}
+3. Use only table and column names exactly as shown in the schema below, including capitalization. Do not invent names or change their case.
+4. Keep queries efficient.
+5. Return a JSON object with a 'plan' array:
    [{{ "title": "Human Readable Title", "sql": "SELECT ...", "description": "Why this matters" }}]
 
 {ref}
@@ -242,13 +326,20 @@ Rules:
         print(f"   [Insights] 🕵️ Discovery Phase: Generating exploration plan for goal: '{goal}'...")
         plan_raw = _llm_generate(client, model, discovery_prompt)
         
-        # Parse JSON Plan
+        # Parse JSON Plan with error handling
         try:
             m = re.search(r"\{.*\}", plan_raw, re.DOTALL)
-            plan = json.loads(m.group()) if m else {}
+            if m:
+                json_str = m.group()
+                json_str = re.sub(r',\s*}', '}', json_str)
+                json_str = re.sub(r',\s*]', ']', json_str)
+                plan = json.loads(json_str)
+            else:
+                plan = {}
             queries = plan.get("plan", [])
         except Exception as e:
             print(f"   [Insights] ❌ Failed to parse discovery plan: {e}")
+            print(f"   [Insights] Raw response: {plan_raw[:200]}...")
             return {"status": "error", "message": "Failed to generate discovery plan."}
 
         # ------------------------------------------------------------------
@@ -298,8 +389,15 @@ Data:
         
         try:
             m = re.search(r"\{.*\}", narrative_raw, re.DOTALL)
-            narrative = json.loads(m.group()) if m else {}
-        except:
+            if m:
+                json_str = m.group()
+                json_str = re.sub(r',\s*}', '}', json_str)
+                json_str = re.sub(r',\s*]', ']', json_str)
+                narrative = json.loads(json_str)
+            else:
+                narrative = {}
+        except Exception as e:
+            print(f"   [Insights] ⚠️ Failed to parse narrative: {e}")
             narrative = {}
 
         insights = {
@@ -313,6 +411,7 @@ Data:
         }
 
         state["llm_insights"] = insights
+        state["insights_generated"] = True
         update_step_progress_state(state, "insights", session_id)
 
         # Cache snapshot

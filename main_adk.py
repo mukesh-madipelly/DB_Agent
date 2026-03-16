@@ -134,7 +134,7 @@ async def run_complete_pipeline_async(custom_query_request: str = None, force_re
     finally:
         # Step 3: Always close connection
         logger.info("3️⃣  Closing database connection...")
-        close_database_connection(tool_context)
+        await close_database_connection(tool_context)
         logger.success("Connection closed")
     
     return {

@@ -101,22 +101,58 @@ async def analyze_column_statistics(tool_context: ToolContext) -> dict:
         return {"status": "error", "message": prereq_check["message"]}
 
     try:
-        # 3. Parallel Execution (Turbo Mode)
+        # 3. Parallel Execution (Turbo Mode) - Only for PostgreSQL
         schema = state.get("schema", {})
         data_samples = {}
         
-        # Get async pool
-        pool = await get_async_database_pool(tool_context)
-        # Limit concurrency to 5 connections to protect the DB
-        semaphore = asyncio.Semaphore(5)
-        
-        tasks = []
-        for table, info in schema.items():
-            tasks.append(_profile_table_async(table, info, pool, semaphore, data_samples))
-        
-        print(f"   🚀 Turbo Engine: Parallelizing analysis for {len(tasks)} tables...")
-        results = await asyncio.gather(*tasks)
-        tables_profiled = sum(1 for r in results if r)
+        if config.DB_TYPE == "postgresql":
+            # Use async operations for PostgreSQL
+            pool = await get_async_database_pool(tool_context)
+            # Limit concurrency to 5 connections to protect the DB
+            semaphore = asyncio.Semaphore(5)
+            
+            tasks = []
+            for table, info in schema.items():
+                tasks.append(_profile_table_async(table, info, pool, semaphore, data_samples))
+            
+            print(f"   🚀 Turbo Engine: Parallelizing analysis for {len(tasks)} tables...")
+            results = await asyncio.gather(*tasks)
+            tables_profiled = sum(1 for r in results if r)
+        else:
+            # Use sync operations for Snowflake and other databases
+            print(f"   📊 Analyzing columns for {len(schema)} tables (sync mode)...")
+            sync_conn = get_database_connection(tool_context)
+            cursor = sync_conn.cursor()
+            
+            try:
+                tables_profiled = 0
+                for table, info in schema.items():
+                    print(f"   [Sync] Analyzing {table}...")
+                    table_ref = _wrap_identifier(table)
+                    
+                    # Get row count
+                    cursor.execute(f"SELECT COUNT(*) FROM {table_ref}")
+                    row_count = cursor.fetchone()[0]
+                    info["row_count"] = row_count
+                    
+                    # Sample data (limit 50)
+                    cursor.execute(f"SELECT * FROM {table_ref} LIMIT 50")
+                    rows = cursor.fetchall()
+                    
+                    # Convert to dict format
+                    processed_rows = []
+                    if rows:
+                        column_names = [desc[0] for desc in cursor.description]
+                        for row in rows:
+                            r_dict = dict(zip(column_names, row))
+                            processed_rows.append(r_dict)
+                    
+                    data_samples[table] = processed_rows
+                    tables_profiled += 1
+                    
+            finally:
+                cursor.close()
+                sync_conn.close()
 
         # 4. Finalize State
         state["data_samples"] = data_samples

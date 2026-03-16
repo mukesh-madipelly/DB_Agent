@@ -47,19 +47,11 @@ async def scan_database_tables(tool_context: ToolContext) -> dict:
     state = state_manager.load_state(session_id) or {}
 
     try:
-        from adk_agents.tools.connection_tools import get_async_database_pool
-        pool = await get_async_database_pool(tool_context)
-        async with pool.acquire() as conn:
-            if config.DB_TYPE == "snowflake":
-                from adk_agents.tools.connection_tools import get_database_connection
-                sync_conn = get_database_connection(tool_context)
-                cursor = sync_conn.cursor()
-                try:
-                    cursor.execute(f"SELECT TABLE_NAME, COLUMN_NAME, DATA_TYPE FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = '{config.SNOWFLAKE.get('schema', 'PUBLIC')}' ORDER BY TABLE_NAME, ORDINAL_POSITION")
-                    rows = cursor.fetchall()
-                finally:
-                    cursor.close()
-            else:
+        if config.DB_TYPE == "postgresql":
+            # Use async operations for PostgreSQL
+            from adk_agents.tools.connection_tools import get_async_database_pool
+            pool = await get_async_database_pool(tool_context)
+            async with pool.acquire() as conn:
                 pg_schema = config.POSTGRESQL_SCHEMA
                 print(f"   - Executing schema query on PostgreSQL (schema: {pg_schema})...")
                 rows = await conn.fetch("""
@@ -68,31 +60,51 @@ async def scan_database_tables(tool_context: ToolContext) -> dict:
                     WHERE table_schema = $1
                     ORDER BY table_name, ordinal_position
                 """, pg_schema)
-            schema = {}
-            for row in rows:
-                if not isinstance(row, (tuple, list)):
-                    r_dict = dict(row)
-                    table_name, col_name, col_type = r_dict["table_name"], r_dict["column_name"], r_dict["data_type"]
+        else:
+            # Use sync operations for Snowflake and other databases
+            from adk_agents.tools.connection_tools import get_database_connection
+            sync_conn = get_database_connection(tool_context)
+            cursor = sync_conn.cursor()
+            try:
+                if config.DB_TYPE == "snowflake":
+                    sf_schema = config.SNOWFLAKE.get('schema', 'PUBLIC')
+                    print(f"   - Executing schema query on Snowflake (schema: {sf_schema})...")
+                    cursor.execute(f"SELECT TABLE_NAME, COLUMN_NAME, DATA_TYPE FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = '{sf_schema}' ORDER BY TABLE_NAME, ORDINAL_POSITION")
                 else:
-                    table_name, col_name, col_type = row
-                if table_name not in schema:
-                    schema[table_name] = {"columns": []}
-                schema[table_name]["columns"].append({"name": col_name, "type": col_type})
-            print(f"   - Processed {len(schema)} tables")
-            state["schema"] = schema
-            state["tables_scanned"] = True
-            for k, v in state.items():
-                tool_context.state[k] = v
-            update_step_progress_state(state, "metadata", session_id)
-            save_current_state(tool_context)
-            cache.set("schema_scan", db_config, {"schema": schema})
-            print("\u2705 Tool execution completed successfully (Turbo Engine ⚡)")
-            return {
-                "status": "success",
-                "from_cache": True,
-                "table_count": len(schema),
-                "schema": schema
-            }
+                    # Fallback for other databases
+                    print(f"   - Executing schema query on {config.DB_TYPE}...")
+                    cursor.execute("SELECT table_name, column_name, data_type FROM information_schema.columns ORDER BY table_name, ordinal_position")
+                rows = cursor.fetchall()
+            finally:
+                cursor.close()
+        
+        # Process results (works for both sync and async)
+        schema = {}
+        for row in rows:
+            if not isinstance(row, (tuple, list)):
+                r_dict = dict(row)
+                table_name, col_name, col_type = r_dict["table_name"], r_dict["column_name"], r_dict["data_type"]
+            else:
+                table_name, col_name, col_type = row
+            if table_name not in schema:
+                schema[table_name] = {"columns": []}
+            schema[table_name]["columns"].append({"name": col_name, "type": col_type})
+        
+        print(f"   - Processed {len(schema)} tables")
+        state["schema"] = schema
+        state["tables_scanned"] = True
+        for k, v in state.items():
+            tool_context.state[k] = v
+        update_step_progress_state(state, "metadata", session_id)
+        save_current_state(tool_context)
+        cache.set("schema_scan", db_config, {"schema": schema})
+        print("✅ Tool execution completed successfully (Turbo Engine ⚡)")
+        return {
+            "status": "success",
+            "from_cache": True,
+            "table_count": len(schema),
+            "schema": schema
+        }
     except Exception as e:
         from adk_agents.tools.error_utils import log_and_raise_connection_error
         log_and_raise_connection_error("Turbo Engine Error in metadata scan", e)

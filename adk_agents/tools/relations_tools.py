@@ -25,42 +25,85 @@ async def detect_table_relationships(tool_context: ToolContext) -> dict:
     
     try:
         schema = state.get("schema", {})
-        from adk_agents.tools.connection_tools import get_async_database_pool
-        pool = await get_async_database_pool(tool_context)
         
         found = set()
         fk_count = 0
         naming_count = 0
         
-        async with pool.acquire() as conn:
-            if config.DB_TYPE == "snowflake":
-                # Fallback to sync for Snowflake
-                from adk_agents.tools.connection_tools import get_database_connection
-                sync_conn = get_database_connection(tool_context)
-                cursor = sync_conn.cursor()
-                try:
-                    cursor.execute(f"SELECT fk_table_name, fk_column_name, pk_table_name, pk_column_name FROM INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS WHERE fk_schema = '{config.SNOWFLAKE.get('schema', 'PUBLIC')}'")
-                    fk_results = cursor.fetchall()
-                    for r in fk_results:
-                        found.add(f"{r[0].lower()}.{r[1].lower()} → {r[2].lower()}.{r[3].lower()}")
-                        fk_count += 1
-                finally:
-                    cursor.close()
-            else:
+        if config.DB_TYPE == "postgresql":
+            # Use async operations for PostgreSQL
+            from adk_agents.tools.connection_tools import get_async_database_pool
+            pool = await get_async_database_pool(tool_context)
+            
+            async with pool.acquire() as conn:
                 pg_schema = config.POSTGRESQL_SCHEMA
+                print(f"   - Analyzing relationships in PostgreSQL (schema: {pg_schema})...")
+                
+                # Foreign key relationships
                 fk_results = await conn.fetch("""
-                    SELECT kcu.table_name, kcu.column_name, ccu.table_name as parent_table, ccu.column_name as parent_column
-                    FROM information_schema.table_constraints AS tc
-                    JOIN information_schema.key_column_usage AS kcu ON tc.constraint_name = kcu.constraint_name AND tc.table_schema = kcu.table_schema
-                    JOIN information_schema.constraint_column_usage AS ccu ON ccu.constraint_name = tc.constraint_name AND ccu.table_schema = tc.table_schema
-                    WHERE tc.constraint_type = 'FOREIGN KEY' AND tc.table_schema = $1
+                    SELECT 
+                        tc.table_name as fk_table,
+                        kcu.column_name as fk_column,
+                        ccu.table_name as pk_table,
+                        ccu.column_name as pk_column
+                    FROM information_schema.table_constraints tc
+                    JOIN information_schema.key_column_usage kcu ON tc.constraint_name = kcu.constraint_name
+                    JOIN information_schema.constraint_column_usage ccu ON tc.constraint_name = ccu.constraint_name
+                    WHERE tc.constraint_type = 'FOREIGN KEY' 
+                    AND tc.table_schema = $1
+                    AND kcu.table_schema = $1
                 """, pg_schema)
+                
                 for r in fk_results:
-                    r_dict = dict(r)
-                    found.add(f"{r_dict['table_name'].lower()}.{r_dict['column_name'].lower()} → {r_dict['parent_table'].lower()}.{r_dict['parent_column'].lower()}")
+                    found.add(f"{r['fk_table'].lower()}.{r['fk_column'].lower()} → {r['pk_table'].lower()}.{r['pk_column'].lower()}")
                     fk_count += 1
-
-        # Naming conventions
+        else:
+            # Use sync operations for Snowflake and other databases
+            from adk_agents.tools.connection_tools import get_database_connection
+            sync_conn = get_database_connection(tool_context)
+            cursor = sync_conn.cursor()
+            
+            try:
+                if config.DB_TYPE == "snowflake":
+                    sf_schema = config.SNOWFLAKE.get('schema', 'PUBLIC')
+                    print(f"   - Analyzing relationships in Snowflake (schema: {sf_schema})...")
+                    # Use TABLE_CONSTRAINTS and KEY_COLUMN_USAGE for Snowflake
+                    cursor.execute(f"""
+                        SELECT 
+                            tc.table_name as fk_table,
+                            kcu.column_name as fk_column,
+                            ccu.table_name as pk_table,
+                            ccu.column_name as pk_column
+                        FROM information_schema.table_constraints tc
+                        JOIN information_schema.key_column_usage kcu 
+                            ON tc.constraint_name = kcu.constraint_name 
+                            AND tc.table_schema = kcu.table_schema
+                        JOIN information_schema.constraint_column_usage ccu 
+                            ON ccu.constraint_name = tc.constraint_name 
+                            AND ccu.table_schema = tc.table_schema
+                        WHERE tc.constraint_type = 'FOREIGN KEY' 
+                        AND tc.table_schema = '{sf_schema}'
+                    """)
+                else:
+                    print(f"   - Analyzing relationships in {config.DB_TYPE}...")
+                    cursor.execute("SELECT fk_table_name, fk_column_name, pk_table_name, pk_column_name FROM information_schema.referential_constraints")
+                
+                fk_results = cursor.fetchall()
+                for r in fk_results:
+                    found.add(f"{r[0].lower()}.{r[1].lower()} → {r[2].lower()}.{r[3].lower()}")
+                    fk_count += 1
+            except Exception as db_error:
+                print(f"   - Foreign key detection not available for {config.DB_TYPE}: {str(db_error)}")
+                print("   - Proceeding with naming convention detection only...")
+                fk_count = 0
+            finally:
+                cursor.close()
+                sync_conn.close()
+        
+        # For PostgreSQL, we already handled it above
+        # For other databases, we might add more logic here if needed
+        
+        # Naming conventions (works for all databases)
         table_names = list(schema.keys())
         for table, info in schema.items():
             for col in info["columns"]:
