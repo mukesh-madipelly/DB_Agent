@@ -8,6 +8,7 @@ from typing import Dict, List, Any
 from google.adk.tools.tool_context import ToolContext
 from adk_agents.state_manager import update_step_progress_state, get_state_manager, save_current_state
 
+
 # Common PII Regex Patterns
 PII_PATTERNS = {
     "Email": r'[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+',
@@ -96,6 +97,9 @@ async def audit_data_quality(tool_context: ToolContext) -> dict:
         try:
             from google import genai
             client = genai.Client(api_key=config.GOOGLE_API_KEY)
+        except Exception as e:
+            from adk_agents.tools.error_utils import log_and_raise_connection_error
+            log_and_raise_connection_error("Error initializing LLM client for PII audit", e)
             
             prompt = f"""
             Analyze these database columns and their samples to detect if they contain PII (Personally Identifiable Information) 

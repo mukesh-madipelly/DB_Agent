@@ -56,8 +56,8 @@ async def _profile_table_async(table: str, info: dict, pool, semaphore, data_sam
                 info["columns_profile"] = {} # Clear old profile
                 return True
             except Exception as e:
-                print(f"   [Turbo] ❌ Error sampling {table}: {str(e)}")
-                return False
+                from adk_agents.tools.error_utils import log_and_raise_connection_error
+                log_and_raise_connection_error(f"Error sampling table {table}", e)
 
 
 async def analyze_column_statistics(tool_context: ToolContext) -> dict:

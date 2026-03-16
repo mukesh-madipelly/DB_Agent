@@ -2,6 +2,7 @@ import asyncpg
 import config
 import asyncio
 
+
 async def create_async_db_pool():
     """
     Creates and returns an asynchronous connection pool for PostgreSQL.
@@ -29,7 +30,8 @@ async def create_async_db_pool():
         )
         return pool
     except Exception as e:
-        raise ConnectionError(f"Failed to create asyncpg pool: {str(e)}")
+        from adk_agents.tools.error_utils import log_and_raise_connection_error
+        log_and_raise_connection_error("Failed to create asyncpg pool", e)
 
 async def setup_readonly_session(conn):
     """Initializes the session in read-only mode."""

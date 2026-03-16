@@ -8,6 +8,7 @@ from adk_agents.tools import (
     generate_business_insights,
     generate_comprehensive_report,
     execute_ad_hoc_query,
+    error_utils,
     audit_data_quality
 )
 
@@ -50,7 +51,7 @@ def create_adaptive_pipeline_agent() -> LlmAgent:
 
         ## RULES
         - Do NOT skip Steps 1-5 based on state flags. ALWAYS re-run them for real-time accuracy.
-        - If a tool fails, report it but try to proceed with subsequent mandatory steps.
+        - If a tool fails, use error_utils to log and raise the error, but try to proceed with subsequent mandatory steps.
         - Only call `generate_comprehensive_report` once at the very end.
         """
     )

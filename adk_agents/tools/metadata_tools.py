@@ -9,6 +9,7 @@ from google.adk.tools.tool_context import ToolContext
 from adk_agents.tools.query_cache import get_query_cache
 from adk_agents.state_manager import update_step_progress_state, get_state_manager, save_current_state
 
+
 async def scan_database_tables(tool_context: ToolContext) -> dict:
     """Scans the database and returns a complete map of all tables and their columns (Turbo Mode)."""
     print("🔧 Tool invocation: scan_database_tables (Async Turbo Engine active ⚡)")
@@ -48,10 +49,8 @@ async def scan_database_tables(tool_context: ToolContext) -> dict:
     try:
         from adk_agents.tools.connection_tools import get_async_database_pool
         pool = await get_async_database_pool(tool_context)
-
         async with pool.acquire() as conn:
             if config.DB_TYPE == "snowflake":
-                # Fallback to sync for Snowflake (asyncpg doesn't support it)
                 from adk_agents.tools.connection_tools import get_database_connection
                 sync_conn = get_database_connection(tool_context)
                 cursor = sync_conn.cursor()
@@ -69,7 +68,6 @@ async def scan_database_tables(tool_context: ToolContext) -> dict:
                     WHERE table_schema = $1
                     ORDER BY table_name, ordinal_position
                 """, pg_schema)
-
             schema = {}
             for row in rows:
                 if not isinstance(row, (tuple, list)):
@@ -77,33 +75,26 @@ async def scan_database_tables(tool_context: ToolContext) -> dict:
                     table_name, col_name, col_type = r_dict["table_name"], r_dict["column_name"], r_dict["data_type"]
                 else:
                     table_name, col_name, col_type = row
-
                 if table_name not in schema:
                     schema[table_name] = {"columns": []}
                 schema[table_name]["columns"].append({"name": col_name, "type": col_type})
-
             print(f"   - Processed {len(schema)} tables")
-
             state["schema"] = schema
             state["tables_scanned"] = True
             for k, v in state.items():
                 tool_context.state[k] = v
-
             update_step_progress_state(state, "metadata", session_id)
             save_current_state(tool_context)
-            
-            # Cache the schema
             cache.set("schema_scan", db_config, {"schema": schema})
-
             print("\u2705 Tool execution completed successfully (Turbo Engine ⚡)")
             return {
                 "status": "success",
+                "from_cache": True,
                 "table_count": len(schema),
-                "schema": schema,
-                "from_cache": False,
-                "message": f"Successfully scanned {len(schema)} tables"
+                "schema": schema
             }
-    
     except Exception as e:
+        from adk_agents.tools.error_utils import log_and_raise_connection_error
+        log_and_raise_connection_error("Turbo Engine Error in metadata scan", e)
         print(f"❌ Turbo Engine Error: {str(e)}")
         return {"status": "error", "message": str(e)}

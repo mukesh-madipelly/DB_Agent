@@ -5,6 +5,10 @@ try:
 except ImportError:
     pass  # dotenv not installed – env vars / defaults will be used
 
+
+# User's high-level business goal for the insights agent
+INSIGHTS_GOAL = os.getenv("INSIGHTS_GOAL", "Analyze the latest license trends and user growth.")
+
 # ============================================
 # ADK Configuration
 # ============================================
@@ -20,8 +24,6 @@ GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", os.getenv("GEMINI_API_KEY", ""))
 # ADK Application Name (identifies your app in session storage)
 ADK_APP_NAME = os.getenv("ADK_APP_NAME", "db_intelligence_agent")
 
-# User's high-level business goal for the insights agent
-INSIGHTS_GOAL = os.getenv("INSIGHTS_GOAL", "Analyze the latest license trends and user growth.")
 
 # ADK Model Configuration
 ADK_MODEL = os.getenv("ADK_MODEL", "gemini-3.1-flash-lite-preview")

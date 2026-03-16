@@ -34,8 +34,9 @@ def _build_relationship_tree(relationships: list) -> dict:
             if child_table not in child_to_parents:
                 child_to_parents[child_table] = []
             child_to_parents[child_table].append(parent_table)
-        except Exception:
-            continue
+        except Exception as e:
+            from adk_agents.tools.error_utils import log_and_raise_connection_error
+            log_and_raise_connection_error("Error building relationship tree", e)
             
     # Identify roots (tables that have children but are not themselves children)
     roots = [t for t in tree if t not in child_to_parents]

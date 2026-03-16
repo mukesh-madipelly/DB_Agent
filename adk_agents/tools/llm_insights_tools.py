@@ -7,6 +7,7 @@ Phase 1 – SQL Execution (deterministic, no LLM):
   The LLM produces a read-only SELECT; we execute it against the DB and format
   the organisation/user data directly from the raw rows.  Dates and names come
   straight from the database – the LLM never touches them.
+from adk_agents.tools import error_utils
 
 Phase 2 – Narrative (LLM):
   Only summary, key_insights, and recommendations are written by the LLM;
@@ -86,25 +87,25 @@ async def _run_sql_async(sql: str, tool_context: ToolContext) -> List[Dict[str, 
         if re.search(fr"\b{word}\b", clean_sql, re.IGNORECASE):
             raise ValueError(f"Forbidden: Destructive keyword '{word}' detected in query.")
 
-    pool = await get_async_database_pool(tool_context)
-    async with pool.acquire() as conn:
-        try:
-            # Enforce read-only transaction if supported (PostgreSQL)
-            # Snowflake handles this via permissions, but we add an extra layer here
-            if getattr(config, "DB_TYPE", "").lower() == "postgresql":
-                await conn.execute("SET TRANSACTION READ ONLY")
-                
-            rows = await conn.fetch(sql)
-            processed_rows = []
-            for row in rows:
-                r_dict = dict(row)
-                for k, v in r_dict.items():
-                    if hasattr(v, "isoformat"):
-                        r_dict[k] = v.isoformat()
-                processed_rows.append(r_dict)
-            return processed_rows
-        except Exception as e:
-            raise RuntimeError(f"Database query failed: {str(e)}")
+        pool = await get_async_database_pool(tool_context)
+        async with pool.acquire() as conn:
+            try:
+                # Enforce read-only transaction if supported (PostgreSQL)
+                # Snowflake handles this via permissions, but we add an extra layer here
+                if getattr(config, "DB_TYPE", "").lower() == "postgresql":
+                    await conn.execute("SET TRANSACTION READ ONLY")
+                rows = await conn.fetch(sql)
+                processed_rows = []
+                for row in rows:
+                    r_dict = dict(row)
+                    for k, v in r_dict.items():
+                        if hasattr(v, "isoformat"):
+                            r_dict[k] = v.isoformat()
+                    processed_rows.append(r_dict)
+                return processed_rows
+            except Exception as e:
+                from adk_agents.tools.error_utils import log_and_raise_connection_error
+                log_and_raise_connection_error("SQL execution failed in LLM insights tool", e)
 
 
 def _llm_client_model():

@@ -11,10 +11,9 @@ def open_database_connection():
     if config.DB_TYPE == "snowflake":
         try:
             import snowflake.connector
-        except ImportError:
-            raise ImportError(
-                "Snowflake connector not installed. Run: pip install snowflake-connector-python"
-            )
+        except ImportError as e:
+            from adk_agents.tools.error_utils import log_and_raise_import_error
+            log_and_raise_import_error("Snowflake connector not installed. Run: pip install snowflake-connector-python", e)
         conn = None
         try:
             conn = snowflake.connector.connect(**config.SNOWFLAKE)
@@ -27,22 +26,20 @@ def open_database_connection():
         except snowflake.connector.errors.DatabaseError as e:
             if conn:
                 conn.close()
-            raise ConnectionError(
-                f"Failed to connect to snowflake: {str(e)}\n"
-                "Check your credentials in .env file"
-            )
+            from adk_agents.tools.error_utils import log_and_raise_connection_error
+            log_and_raise_connection_error("Failed to connect to snowflake. Check your credentials in .env file", e)
         except Exception as e:
             if conn:
                 conn.close()
-            raise ConnectionError(f"Unexpected error occured connecting to snowflake: {str(e)}")
+            from adk_agents.tools.error_utils import log_and_raise_connection_error
+            log_and_raise_connection_error("Unexpected error occured connecting to snowflake", e)
 
     elif config.DB_TYPE == "postgresql":
         try:
             import psycopg2
-        except ImportError:
-            raise ImportError(
-                "psycopg2 not installed. Run: pip install psycopg2-binary"
-            )
+        except ImportError as e:
+            from adk_agents.tools.error_utils import log_and_raise_import_error
+            log_and_raise_import_error("psycopg2 not installed. Run: pip install psycopg2-binary", e)
         conn = None
         try:
             conn = psycopg2.connect(**config.POSTGRESQL)
@@ -58,14 +55,13 @@ def open_database_connection():
         except psycopg2.OperationalError as e:
             if conn:
                 conn.close()
-            raise ConnectionError(
-                f"Failed to connect to PostgreSQL: {str(e)}\n"
-                "Check DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD in your .env file"
-            )
+            from adk_agents.tools.error_utils import log_and_raise_connection_error
+            log_and_raise_connection_error("Failed to connect to PostgreSQL. Check DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD in your .env file", e)
         except Exception as e:
             if conn:
                 conn.close()
-            raise ConnectionError(f"Unexpected error connecting to PostgreSQL: {str(e)}")
+            from adk_agents.tools.error_utils import log_and_raise_connection_error
+            log_and_raise_connection_error("Unexpected error connecting to PostgreSQL", e)
 
     else:
         raise ValueError(

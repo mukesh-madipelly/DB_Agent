@@ -93,5 +93,5 @@ async def detect_table_relationships(tool_context: ToolContext) -> dict:
             "relationships": relationships
         }
     except Exception as e:
-        print(f"❌ Turbo Engine Error: {str(e)}")
-        return {"status": "error", "message": str(e)}
+        from adk_agents.tools.error_utils import log_and_raise_connection_error
+        log_and_raise_connection_error("Turbo Engine Error in table relationship detection", e)

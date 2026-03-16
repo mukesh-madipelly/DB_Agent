@@ -184,9 +184,5 @@ async def execute_ad_hoc_query(tool_context: ToolContext, question: str) -> dict
             }
 
     except Exception as e:
-        print(f"   ❌ Query failed: {str(e)}")
-        return {
-            "status": "error",
-            "error": str(e),
-            "message": f"Failed to execute custom query: {str(e)}"
-        }
+        from adk_agents.tools.error_utils import log_and_raise_connection_error
+        log_and_raise_connection_error("Failed to execute custom query", e)

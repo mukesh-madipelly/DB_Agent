@@ -8,6 +8,7 @@ It manages user interaction and delegates specialized tasks to sub-agents.
 from google.adk.agents import Agent
 from adk_agents.agents.pipeline_agent import create_adaptive_pipeline_agent
 import config
+from adk_agents.tools import error_utils
 
 def create_root_agent() -> Agent:
     """
