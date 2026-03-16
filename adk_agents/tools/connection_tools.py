@@ -98,9 +98,6 @@ def establish_database_connection(tool_context: ToolContext) -> dict:
                 "status": "success",
                 "message": "Database connection already established and reusing existing connection"
             }
-    except Exception as e:
-        from adk_agents.tools.error_utils import log_and_raise_connection_error
-        log_and_raise_connection_error("Failed to establish database connection", e)
         
         # Get or create connection (stored in module-level cache)
         conn = get_database_connection(tool_context)
@@ -116,6 +113,8 @@ def establish_database_connection(tool_context: ToolContext) -> dict:
         }
     
     except Exception as e:
+        from adk_agents.tools.error_utils import log_and_raise_connection_error
+        log_and_raise_connection_error("Failed to establish database connection", e)
         return {
             "status": "error",
             "error": str(e),

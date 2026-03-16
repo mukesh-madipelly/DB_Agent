@@ -9,7 +9,8 @@ from adk_agents.tools import (
     generate_comprehensive_report,
     execute_ad_hoc_query,
     error_utils,
-    audit_data_quality
+    audit_data_quality,
+    establish_database_connection
 )
 
 def create_adaptive_pipeline_agent() -> LlmAgent:
@@ -23,6 +24,7 @@ def create_adaptive_pipeline_agent() -> LlmAgent:
         description="Master orchestrator for database intelligence analysis and reporting.",
         model=config.AGENT_MODELS.get("insights", config.ADK_MODEL),
         tools=[
+            establish_database_connection,
             scan_database_tables,
             analyze_column_statistics,
             detect_table_relationships,
@@ -37,6 +39,7 @@ def create_adaptive_pipeline_agent() -> LlmAgent:
 
         ## MANDATORY CORE SEQUENCE (RUN EVERY TIME)
         You MUST run these tools in order in every 'run the pipeline' session, even if `ToolContext.state` indicates they were previously completed. Production data changes frequently; absolute freshness is required.
+        0. Execute `establish_database_connection`.
         1.  Execute `scan_database_tables`.
         2.  Execute `analyze_column_statistics`.
         3.  Execute `detect_table_relationships`.
@@ -50,7 +53,7 @@ def create_adaptive_pipeline_agent() -> LlmAgent:
         - **Final Reporting**: ALWAYS finish by calling `generate_comprehensive_report`.
 
         ## RULES
-        - Do NOT skip Steps 1-5 based on state flags. ALWAYS re-run them for real-time accuracy.
+        - Do NOT skip Steps 0-5 based on state flags. ALWAYS re-run them for real-time accuracy.
         - If a tool fails, use error_utils to log and raise the error, but try to proceed with subsequent mandatory steps.
         - Only call `generate_comprehensive_report` once at the very end.
         """

@@ -13,7 +13,7 @@ from .llm_insights_tools import generate_business_insights
 from .reporter_tools import generate_comprehensive_report
 from .custom_data_tools import execute_ad_hoc_query
 from .quality_audit_tool import audit_data_quality
-from .connection_tools import get_database_connection
+from .connection_tools import get_database_connection, establish_database_connection
 from .query_cache import get_query_cache
 
 __all__ = [
@@ -26,5 +26,6 @@ __all__ = [
     'execute_ad_hoc_query',
     'audit_data_quality',
     'get_database_connection',
+    'establish_database_connection',
     'get_query_cache'
 ]
