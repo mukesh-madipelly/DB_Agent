@@ -43,7 +43,7 @@ The agent understands natural language questions and can answer specific queries
 
 1. **Clone the repository:**
    ```bash
-   git clone https://github.com/yourusername/db-agent-adk.git
+   git clone https://github.com/mukesh-madipelly/DB_Agent.git
    cd db-agent-adk
    ```
 
@@ -65,7 +65,7 @@ The agent understands natural language questions and can answer specific queries
 
 1. **Clone the repository:**
    ```bash
-   git clone https://github.com/yourusername/db-agent-adk.git
+   git clone https://github.com/mukesh-madipelly/DB_Agent.git
    cd db-agent-adk
    ```
 
@@ -228,17 +228,6 @@ INSIGHTS_GOAL=Analyze customer behavior patterns and sales trends.
 - Use `python main_adk.py help` for command details
 - Review the `SETUP_GUIDE.md` for detailed setup instructions
 
-## 🤝 Contributing
-
-We welcome contributions! Please:
-
-1. Fork the repository
-2. Create a feature branch: `git checkout -b feature-name`
-3. Make your changes and add tests
-4. Run tests: `python -m pytest tests/`
-5. Commit your changes: `git commit -am 'Add new feature'`
-6. Push to the branch: `git push origin feature-name`
-7. Submit a pull request
 
 ## 📄 License
 
@@ -251,5 +240,3 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - Database support via [psycopg2](https://www.psycopg.org/) and [Snowflake Connector](https://docs.snowflake.com/en/user-guide/python-connector.html)
 
 ---
-
-**Made with ❤️ for data analysts, business users, and anyone who wants to understand their database better.**
