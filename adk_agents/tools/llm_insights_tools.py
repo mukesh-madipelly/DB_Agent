@@ -25,7 +25,7 @@ from google.adk.tools.tool_context import ToolContext
 from adk_agents.state_manager import (
     check_prerequisites_state,
     get_state_manager,
-    update_step_progress_state,
+    update_step_progress,
 )
 import config
 
@@ -150,12 +150,15 @@ async def _run_sql_async(sql: str, tool_context: ToolContext) -> List[Dict[str, 
             try:
                 await conn.execute("SET TRANSACTION READ ONLY")
                 rows = await conn.fetch(sql)
+                import decimal
                 processed_rows = []
                 for row in rows:
                     r_dict = dict(row)
                     for k, v in r_dict.items():
                         if hasattr(v, "isoformat"):
                             r_dict[k] = v.isoformat()
+                        elif isinstance(v, decimal.Decimal):
+                            r_dict[k] = float(v)
                     processed_rows.append(r_dict)
                 return processed_rows
             except Exception as e:
@@ -168,6 +171,7 @@ async def _run_sql_async(sql: str, tool_context: ToolContext) -> List[Dict[str, 
         try:
             cursor.execute(sql)
             rows = cursor.fetchall()
+            import decimal
             processed_rows = []
             column_names = [desc[0] for desc in cursor.description]
             for row in rows:
@@ -175,6 +179,8 @@ async def _run_sql_async(sql: str, tool_context: ToolContext) -> List[Dict[str, 
                 for k, v in r_dict.items():
                     if hasattr(v, "isoformat"):
                         r_dict[k] = v.isoformat()
+                    elif isinstance(v, decimal.Decimal):
+                        r_dict[k] = float(v)
                 processed_rows.append(r_dict)
             return processed_rows
         except Exception as e:
@@ -204,6 +210,48 @@ def _llm_generate(client, model: str, prompt: str, attempts: int = 3) -> str:
             if i == attempts - 1:
                 raise
             time.sleep(2 ** i)
+
+
+def _extract_json(text: str) -> Any:
+    """Robustly extract the first JSON object or list from a string."""
+    if not text:
+        return {}
+    try:
+        # Find first occurrence of either { or [
+        start_obj = text.find('{')
+        start_list = text.find('[')
+        
+        if start_obj == -1 and start_list == -1:
+            return {}
+            
+        if start_obj != -1 and (start_list == -1 or start_obj < start_list):
+            start = start_obj
+            end = text.rfind('}')
+        else:
+            start = start_list
+            end = text.rfind(']')
+            
+        if start != -1 and end != -1 and end > start:
+            json_str = text[start:end+1]
+            # Clean up trailing commas and other common LLM artifacts
+            json_str = re.sub(r',\s*}', '}', json_str)
+            json_str = re.sub(r',\s*]', ']', json_str)
+            return json.loads(json_str)
+    except Exception:
+        pass
+    
+    # Fallback to a wider regex search
+    try:
+        m = re.search(r"([\{\[].*[\}\]])", text, re.DOTALL)
+        if m:
+            json_str = m.group(1)
+            json_str = re.sub(r',\s*}', '}', json_str)
+            json_str = re.sub(r',\s*]', ']', json_str)
+            return json.loads(json_str)
+    except Exception:
+        pass
+        
+    return {}
 
 
 def _schema_stats(schema: Dict[str, Any], relationships: List[str]) -> Dict[str, Any]:
@@ -283,7 +331,7 @@ async def generate_business_insights(tool_context: ToolContext) -> dict:
         snapshot_path = os.path.join(snapshot_dir, "last_insights.json")
 
         changes = state.get("changes", [])
-        no_drift = any("No schema or data changes detected" in str(c) for c in changes)
+        no_drift = any("No changes detected" in str(c) for c in changes)
         
         if no_drift and os.path.exists(snapshot_path):
             try:
@@ -293,7 +341,8 @@ async def generate_business_insights(tool_context: ToolContext) -> dict:
                     # GOAL-AWARE CACHING: Only reuse if the goal hasn't changed
                     if cached_insights.get("goal") == goal:
                         state["llm_insights"] = cached_insights
-                        update_step_progress_state(state, "insights", session_id)
+                        tool_context.state["llm_insights"] = cached_insights
+                        update_step_progress(tool_context, "insights")
                         print(f"   [Insights] 📦 Bypassing LLM: Re-using last insights (No DB drift & same Goal).")
                         return {"status": "success", "insights": cached_insights}
                     else:
@@ -302,16 +351,30 @@ async def generate_business_insights(tool_context: ToolContext) -> dict:
                 pass
 
         # ------------------------------------------------------------------
-        # Stage 1: Discovery Plan
+        # Discovery & Execution Loop (with Retry)
         # ------------------------------------------------------------------
-        if db_type.lower() == "snowflake":
-            prompt_quote_rule = "2. Do NOT use double-quoted identifiers for tables/columns. Use plain names."
-        else:
-            prompt_quote_rule = "2. Use double-quoted identifiers for tables/columns."
-        discovery_prompt = f"""You are a senior data architect for {db_type}.
+        all_datasets = []
+        max_retries = 3
+        failed_queries = []
+
+        for attempt in range(max_retries):
+            print(f"   [Insights] 🔄 Attempt {attempt + 1}/{max_retries}...")
+            
+            # Stage 1: Discovery Plan
+            if db_type.lower() == "snowflake":
+                prompt_quote_rule = "2. Do NOT use double-quoted identifiers for tables/columns. Use plain names."
+            else:
+                prompt_quote_rule = "2. Use double-quoted identifiers for tables/columns."
+            
+            retry_context = ""
+            if failed_queries:
+                retry_context = f"\nNote: The following queries previously returned no data or failed. Please try different approach or different tables:\n" + "\n".join([f"- {q}" for q in failed_queries[-5:]])
+
+            discovery_prompt = f"""You are a senior data architect for {db_type}.
 Based on the database schema below and the user's business goal, identify 2-3 specific SQL queries that would provide the most value.
 
 User Goal: {goal}
+{retry_context}
 
 Rules:
 1. ONLY produce SELECT queries.
@@ -323,52 +386,72 @@ Rules:
 
 {ref}
 """
-        print(f"   [Insights] 🕵️ Discovery Phase: Generating exploration plan for goal: '{goal}'...")
-        plan_raw = _llm_generate(client, model, discovery_prompt)
-        
-        # Parse JSON Plan with error handling
-        try:
-            m = re.search(r"\{.*\}", plan_raw, re.DOTALL)
-            if m:
-                json_str = m.group()
-                json_str = re.sub(r',\s*}', '}', json_str)
-                json_str = re.sub(r',\s*]', ']', json_str)
-                plan = json.loads(json_str)
-            else:
-                plan = {}
-            queries = plan.get("plan", [])
-        except Exception as e:
-            print(f"   [Insights] ❌ Failed to parse discovery plan: {e}")
-            print(f"   [Insights] Raw response: {plan_raw[:200]}...")
-            return {"status": "error", "message": "Failed to generate discovery plan."}
-
-        # ------------------------------------------------------------------
-        # Stage 2: Execution
-        # ------------------------------------------------------------------
-        datasets = []
-        for q_item in queries:
-            title = q_item.get("title", "Insight Data")
-            sql = q_item.get("sql", "")
-            if not sql: continue
+            print(f"   [Insights] 🕵️ Discovery Phase: Generating exploration plan (Attempt {attempt + 1})...")
+            plan_raw = _llm_generate(client, model, discovery_prompt)
             
-            print(f"   [Insights] 🚀 Executing: {title}...")
-            try:
-                rows = await _run_sql_async(sql, tool_context)
-                datasets.append({
-                    "title": title,
-                    "description": q_item.get("description", ""),
-                    "data": rows[:10] # Limit per dataset for LLM narrative
-                })
-            except Exception as exc:
-                print(f"   [Insights] ⚠️ Failed query '{title}': {exc}")
+            # Parse JSON Plan
+            plan_data = _extract_json(plan_raw)
+            if isinstance(plan_data, list):
+                queries = plan_data
+            elif isinstance(plan_data, dict):
+                queries = plan_data.get("plan", [])
+            else:
+                queries = []
 
-        if not datasets:
-            return {"status": "error", "message": "No data could be retrieved during discovery."}
+            if not queries:
+                print(f"   [Insights] ⚠️ No plan found in LLM response. Raw: {plan_raw[:100]}...")
+                continue
+
+            # Stage 2: Execution & Filtering
+            current_attempt_datasets = []
+            for q_item in queries:
+                title = q_item.get("title", "Insight Data")
+                sql = q_item.get("sql", "")
+                if not sql: continue
+                
+                print(f"   [Insights] 🚀 Executing: {title}...")
+                try:
+                    rows = await _run_sql_async(sql, tool_context)
+                    if rows and len(rows) > 0:
+                        current_attempt_datasets.append({
+                            "title": title,
+                            "description": q_item.get("description", ""),
+                            "data": rows[:10]
+                        })
+                    else:
+                        print(f"   [Insights] ℹ️  Query '{title}' returned no data. Filtering out.")
+                        failed_queries.append(sql)
+                except Exception as exc:
+                    print(f"   [Insights] ⚠️ Failed query '{title}': {exc}")
+                    failed_queries.append(sql)
+
+            # Combine with previous successful datasets (avoid duplicates by title)
+            existing_titles = {d["title"] for d in all_datasets}
+            for d in current_attempt_datasets:
+                if d["title"] not in existing_titles:
+                    all_datasets.append(d)
+                    existing_titles.add(d["title"])
+
+            if len(all_datasets) >= 2:
+                print(f"   [Insights] ✅ Found {len(all_datasets)} valid datasets. Proceeding to synthesis.")
+                break
+            else:
+                print(f"   [Insights] ⚠️ Only {len(all_datasets)} valid datasets found. Retrying...")
+
+        if not all_datasets:
+            return {"status": "error", "message": "No data could be retrieved during discovery after retries."}
+        
+        datasets = all_datasets
 
         # ------------------------------------------------------------------
-        # Stage 3: Narrative Narrative
+        # Stage 3: Narrative Phase
         # ------------------------------------------------------------------
-        datasets_json = json.dumps(datasets, indent=2)
+        print(f"   [Insights] 📝 Narrative Phase: Synthesizing results for {len(datasets)} datasets...")
+        try:
+            datasets_json = json.dumps(datasets, indent=2)
+        except Exception as e:
+            print(f"   [Insights] ⚠️ JSON dump failed, falling back to str representation: {e}")
+            datasets_json = str(datasets)
         narrative_prompt = f"""You are a data-driven business analyst.
 Review the raw datasets below and produce a structured report.
 
@@ -384,21 +467,9 @@ Output Format (JSON strictly):
 Data:
 {datasets_json}
 """
-        print("   [Insights] 📝 Narrative Phase: Synthesizing results...")
         narrative_raw = _llm_generate(client, model, narrative_prompt)
         
-        try:
-            m = re.search(r"\{.*\}", narrative_raw, re.DOTALL)
-            if m:
-                json_str = m.group()
-                json_str = re.sub(r',\s*}', '}', json_str)
-                json_str = re.sub(r',\s*]', ']', json_str)
-                narrative = json.loads(json_str)
-            else:
-                narrative = {}
-        except Exception as e:
-            print(f"   [Insights] ⚠️ Failed to parse narrative: {e}")
-            narrative = {}
+        narrative = _extract_json(narrative_raw)
 
         insights = {
             "domain": "Dynamic Discovery",
@@ -410,9 +481,9 @@ Data:
             "schema_stats": _schema_stats(schema, relationships),
         }
 
-        state["llm_insights"] = insights
-        state["insights_generated"] = True
-        update_step_progress_state(state, "insights", session_id)
+        tool_context.state["llm_insights"] = insights
+        tool_context.state["insights_generated"] = True
+        update_step_progress(tool_context, "insights")
 
         # Cache snapshot
         try:

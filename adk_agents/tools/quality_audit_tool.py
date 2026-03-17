@@ -6,7 +6,7 @@ import re
 import config
 from typing import Dict, List, Any
 from google.adk.tools.tool_context import ToolContext
-from adk_agents.state_manager import update_step_progress_state, get_state_manager, save_current_state
+from adk_agents.state_manager import update_step_progress, get_state_manager, save_current_state
 
 
 # Common PII Regex Patterns
@@ -130,14 +130,9 @@ async def audit_data_quality(tool_context: ToolContext) -> dict:
             print(f"   ⚠️ LLM Audit Warning: {str(e)}")
 
     # 3. Save Results
-    state["pii_alerts"] = pii_alerts
-    state["audit_complete"] = True
-    
-    for k, v in state.items():
-        tool_context.state[k] = v
-        
-    update_step_progress_state(state, "audit", session_id)
-    save_current_state(tool_context)
+    tool_context.state["pii_alerts"] = pii_alerts
+    tool_context.state["audit_complete"] = True
+    update_step_progress(tool_context, "audit")
     
     print(f"✅ Audit Finish: Found {len(pii_alerts)} sensitive data points. 🛡️")
     return {

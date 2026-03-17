@@ -3,7 +3,7 @@ import asyncio
 from google.adk.tools.tool_context import ToolContext
 from adk_agents.tools.connection_tools import get_database_connection, get_async_database_pool
 from adk_agents.tools.query_cache import get_query_cache
-from adk_agents.state_manager import check_prerequisites_state, update_step_progress_state, get_state_manager, save_current_state
+from adk_agents.state_manager import check_prerequisites_state, update_step_progress, get_state_manager, save_current_state
 
 
 def _wrap_identifier(name: str) -> str:
@@ -82,15 +82,7 @@ async def analyze_column_statistics(tool_context: ToolContext) -> dict:
     
     if cached_result:
         print(f"   - 📦 Cache hit! (Turbo Engine bypassing SQL execution)")
-        state_manager = get_state_manager()
-        state = state_manager.load_state(session_id) or {}
-        state["schema"] = cached_result.get("schema", {})
-        state["data_samples"] = cached_result.get("data_samples", {})
-        state["profiling_complete"] = True
-        for k, v in state.items():
-            tool_context.state[k] = v
-        update_step_progress_state(state, "profiler", session_id)
-        save_current_state(tool_context)
+        update_step_progress(tool_context, "profiler")
         return {"status": "success", "from_cache": True, "message": "Successfully loaded cached profiling stats"}
 
     # 2. Logic Check
@@ -155,15 +147,10 @@ async def analyze_column_statistics(tool_context: ToolContext) -> dict:
                 sync_conn.close()
 
         # 4. Finalize State
-        state["data_samples"] = data_samples
-        state["schema"] = schema
-        state["profiling_complete"] = True
-        
-        for k, v in state.items():
-            tool_context.state[k] = v
-            
-        update_step_progress_state(state, "profiler", session_id)
-        save_current_state(tool_context)
+        tool_context.state["data_samples"] = data_samples
+        tool_context.state["schema"] = schema
+        tool_context.state["profiling_complete"] = True
+        update_step_progress(tool_context, "profiler")
         
         # Cache for next time
         cache.set("column_profiling", db_config, {

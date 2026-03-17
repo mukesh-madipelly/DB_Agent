@@ -7,7 +7,7 @@ import asyncio
 from typing import Dict, List, Any
 from google.adk.tools.tool_context import ToolContext
 from adk_agents.tools.query_cache import get_query_cache
-from adk_agents.state_manager import update_step_progress_state, get_state_manager, save_current_state
+from adk_agents.state_manager import update_step_progress, get_state_manager, save_current_state
 
 
 async def scan_database_tables(tool_context: ToolContext) -> dict:
@@ -33,14 +33,7 @@ async def scan_database_tables(tool_context: ToolContext) -> dict:
     if cached_result:
         print(f"   - 📦 Cache hit for schema scan")
         schema = cached_result.get("schema", {})
-        state_manager = get_state_manager()
-        state = state_manager.load_state(session_id) or {}
-        state["schema"] = schema
-        state["tables_scanned"] = True
-        for k, v in state.items():
-            tool_context.state[k] = v
-        update_step_progress_state(state, "metadata", session_id)
-        save_current_state(tool_context)
+        update_step_progress(tool_context, "metadata")
         return {"status": "success", "from_cache": True, "table_count": len(schema), "schema": schema}
 
     state_manager = get_state_manager()
@@ -91,17 +84,14 @@ async def scan_database_tables(tool_context: ToolContext) -> dict:
             schema[table_name]["columns"].append({"name": col_name, "type": col_type})
         
         print(f"   - Processed {len(schema)} tables")
-        state["schema"] = schema
-        state["tables_scanned"] = True
-        for k, v in state.items():
-            tool_context.state[k] = v
-        update_step_progress_state(state, "metadata", session_id)
-        save_current_state(tool_context)
+        tool_context.state["schema"] = schema
+        tool_context.state["tables_scanned"] = True
+        update_step_progress(tool_context, "metadata")
         cache.set("schema_scan", db_config, {"schema": schema})
         print("✅ Tool execution completed successfully (Turbo Engine ⚡)")
         return {
             "status": "success",
-            "from_cache": True,
+            "from_cache": False,
             "table_count": len(schema),
             "schema": schema
         }

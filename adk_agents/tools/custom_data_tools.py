@@ -47,7 +47,8 @@ def _generate_sql_from_question(question: str, schema_ref: str) -> str:
     model = config.AGENT_MODELS.get("insights", config.ADK_MODEL)
     client = genai.Client(api_key=api_key)
 
-    prompt = f"""You are an expert PostgreSQL developer.
+    if config.DB_TYPE == "postgresql":
+        prompt = f"""You are an expert PostgreSQL developer.
 Write a SINGLE read-only SELECT query that answers this question:
 "{question}"
 
@@ -55,6 +56,32 @@ Rules:
 - Use double-quoted identifiers for table and column names (e.g. "Organisation", "User", "Id").
 - Only use tables/columns listed in the schema below.
 - You must return a JSON object with exactly two keys: "title" (a short, descriptive heading for a report section) and "sql" (the raw postgresql query itself).
+- Do not wrap the JSON in markdown fences (no ```json).
+
+{schema_ref}
+"""
+    elif config.DB_TYPE == "snowflake":
+        prompt = f"""You are an expert Snowflake developer.
+Write a SINGLE read-only SELECT query that answers this question:
+"{question}"
+
+Rules:
+- Use plain identifiers for table and column names (no double quotes needed).
+- Only use tables/columns listed in the schema below.
+- You must return a JSON object with exactly two keys: "title" (a short, descriptive heading for a report section) and "sql" (the raw snowflake query itself).
+- Do not wrap the JSON in markdown fences (no ```json).
+
+{schema_ref}
+"""
+    else:
+        prompt = f"""You are an expert SQL developer.
+Write a SINGLE read-only SELECT query that answers this question:
+"{question}"
+
+Rules:
+- Use appropriate identifier quoting for the database type.
+- Only use tables/columns listed in the schema below.
+- You must return a JSON object with exactly two keys: "title" (a short, descriptive heading for a report section) and "sql" (the raw query itself).
 - Do not wrap the JSON in markdown fences (no ```json).
 
 {schema_ref}
@@ -124,64 +151,93 @@ async def execute_ad_hoc_query(tool_context: ToolContext, question: str) -> dict
             "message": f"Failed to generate SQL: {str(e)}"
         }
 
-    # Safety check - only allow SELECT
+    # Safety check - only allow SELECT or WITH (CTEs)
     clean_query = re.sub(r'--.*$', '', query, flags=re.MULTILINE)
     clean_query = re.sub(r'/\*.*?\*/', '', clean_query, flags=re.DOTALL)
     
-    if not clean_query.strip().lower().startswith("select"):
+    if not re.match(r"^\s*(SELECT|WITH)\b", clean_query, re.IGNORECASE):
         return {
             "status": "error",
-            "message": "Generated query is not a SELECT statement. Aborting for safety."
+            "message": "Generated query must be a SELECT or WITH statement. Aborting for safety."
         }
 
-    # Step 2: Execute the query securely using async pool
-    from adk_agents.tools.connection_tools import get_async_database_pool
+    # Step 2: Execute the query securely using appropriate connection
     try:
-        pool = await get_async_database_pool(tool_context)
-        async with pool.acquire() as conn:
-            # Enforce Read-Only and set a generous 30s timeout
-            await conn.execute("SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY;")
-            await conn.execute("SET statement_timeout = 30000;")
-            
-            rows = await conn.fetch(query)
-            
-            # Convert rows to list of dicts with JSON-serializable values
-            results = []
-            for row in rows:
-                row_dict = {}
-                for col, val in dict(row).items():
-                    row_dict[col] = _serialize_value(val)
-                results.append(row_dict)
+        if config.DB_TYPE == "postgresql":
+            # Use async operations for PostgreSQL
+            from adk_agents.tools.connection_tools import get_async_database_pool
+            pool = await get_async_database_pool(tool_context)
+            async with pool.acquire() as conn:
+                # Enforce Read-Only and set a generous 30s timeout
+                await conn.execute("SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY;")
+                await conn.execute("SET statement_timeout = 30000;")
+                
+                rows = await conn.fetch(query)
+                
+                # Convert rows to list of dicts with JSON-serializable values
+                results = []
+                for row in rows:
+                    row_dict = {}
+                    for col, val in dict(row).items():
+                        row_dict[col] = _serialize_value(val)
+                    results.append(row_dict)
 
-            print(f"   ✅ Query returned {len(rows)} rows")
-
-            # Store in state for the reporter
-            custom_findings = state.get("custom_findings", [])
-            finding = {
-                "title": title,
-                "description": question,
-                "query": query,
-                "results": results[:20],  # limit to 20 rows for the report
-                "total_rows_found": len(rows)
-            }
-            custom_findings.append(finding)
-            state["custom_findings"] = custom_findings
-
-            # Sync back to tool_context
-            for k, v in state.items():
-                tool_context.state[k] = v
-
-            # Save DIRECTLY to disk
-            state_manager.save_state(session_id, state)
-            print(f"   💾 Saved custom_findings to state file (session: {session_id})")
-
+        elif config.DB_TYPE == "snowflake":
+            # Use sync operations for Snowflake
+            from adk_agents.tools.connection_tools import get_database_connection
+            sync_conn = get_database_connection(tool_context)
+            cursor = sync_conn.cursor()
+            try:
+                # Execute query with timeout
+                cursor.execute(query)
+                rows = cursor.fetchall()
+                
+                # Convert rows to list of dicts with JSON-serializable values
+                results = []
+                column_names = [desc[0] for desc in cursor.description]
+                for row in rows:
+                    row_dict = dict(zip(column_names, row))
+                    for col, val in row_dict.items():
+                        row_dict[col] = _serialize_value(val)
+                    results.append(row_dict)
+            finally:
+                cursor.close()
+                sync_conn.close()
+        else:
             return {
-                "status": "success",
-                "message": f"Found {len(rows)} rows for: {question}",
-                "description": question,
-                "row_count": len(rows),
-                "preview": results[:5]
+                "status": "error",
+                "message": f"Unsupported database type: {config.DB_TYPE}"
             }
+
+        print(f"   ✅ Query returned {len(results)} rows")
+
+        # Store in state for the reporter
+        custom_findings = state.get("custom_findings", [])
+        finding = {
+            "title": title,
+            "description": question,
+            "query": query,
+            "results": results[:20],  # limit to 20 rows for the report
+            "total_rows_found": len(results)
+        }
+        custom_findings.append(finding)
+        state["custom_findings"] = custom_findings
+
+        # Sync back to tool_context
+        for k, v in state.items():
+            tool_context.state[k] = v
+
+        # Save DIRECTLY to disk
+        state_manager.save_state(session_id, state)
+        print(f"   💾 Saved custom_findings to state file (session: {session_id})")
+
+        return {
+            "status": "success",
+            "message": f"Found {len(results)} rows for: {question}",
+            "description": question,
+            "row_count": len(results),
+            "preview": results[:5]
+        }
 
     except Exception as e:
         from adk_agents.tools.error_utils import log_and_raise_connection_error

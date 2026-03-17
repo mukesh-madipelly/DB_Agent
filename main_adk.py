@@ -324,10 +324,9 @@ def chat(session_id: str = ""):
 
     # ── Auto-discover latest session ──────────────────────────────────────
     if not session_id:
-        pattern = os.path.join(state_manager.state_dir, "pipeline_*.json")
-        files = sorted(glob.glob(pattern), key=os.path.getmtime, reverse=True)
-        if files:
-            session_id = os.path.basename(files[0]).replace(".json", "")
+        latest_session = state_manager.get_latest_session_id("pipeline_")
+        if latest_session:
+            session_id = latest_session
             print(f"📂 Auto-loaded latest session: {session_id}")
         else:
             session_id = f"chat_{datetime.now().strftime('%Y%m%d_%H%M%S')}"

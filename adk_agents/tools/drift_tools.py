@@ -45,11 +45,10 @@ async def detect_schema_changes(tool_context: ToolContext) -> dict:
 
         if not previous_schema:
             changes = ["ℹ️  First run baseline created."]
-            state["changes"] = changes
+            tool_context.state["changes"] = changes
             with open(snapshot_path, 'w') as f:
                 json.dump({"schema": current_schema, "timestamp": str(datetime.now())}, f, indent=2)
-            update_step_progress_state(state, "drift", session_id)
-            save_current_state(tool_context)
+            update_step_progress(tool_context, "drift")
             return {"status": "success", "change_count": 0, "changes": changes}
 
         changes = []
@@ -70,14 +69,13 @@ async def detect_schema_changes(tool_context: ToolContext) -> dict:
             for c in sorted(set(p_cols) - set(c_cols)): changes.append(f"❌ **{t}**: Dropped column `{c}`")
         
         if not changes: changes.append("✅ No changes detected.")
-        state["changes"] = changes
+        tool_context.state["changes"] = changes
         
         # Update baseline
         with open(snapshot_path, 'w') as f:
             json.dump({"schema": current_schema, "timestamp": str(datetime.now())}, f, indent=2)
             
-        update_step_progress_state(state, "drift", session_id)
-        save_current_state(tool_context)
+        update_step_progress(tool_context, "drift")
         
         print(f"✅ Drift Check OK: {len(changes)} changes (Turbo Engine ⚡)")
         return {"status": "success", "change_count": len(changes), "changes": changes}

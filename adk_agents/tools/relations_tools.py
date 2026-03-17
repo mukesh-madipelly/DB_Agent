@@ -5,7 +5,7 @@ ADK Tools for Detecting Table Relationships (Async Turbo Engine active ⚡)
 import config
 import asyncio
 from google.adk.tools.tool_context import ToolContext
-from adk_agents.state_manager import check_prerequisites_state, update_step_progress_state, get_state_manager, save_current_state
+from adk_agents.state_manager import check_prerequisites_state, update_step_progress, get_state_manager, save_current_state
 
 async def detect_table_relationships(tool_context: ToolContext) -> dict:
     """Detects relationships between database tables (Turbo Mode)."""
@@ -120,12 +120,8 @@ async def detect_table_relationships(tool_context: ToolContext) -> dict:
                             naming_count += 1
         
         relationships = sorted(found)
-        state["relationships"] = relationships
-        for k, v in state.items():
-            tool_context.state[k] = v
-            
-        update_step_progress_state(state, "relations", session_id)
-        save_current_state(tool_context)
+        tool_context.state["relationships"] = relationships
+        update_step_progress(tool_context, "relations")
         
         print(f"✅ Relations OK: Found {len(relationships)} (Turbo Engine ⚡)")
         return {

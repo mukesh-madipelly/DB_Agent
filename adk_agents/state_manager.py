@@ -289,6 +289,31 @@ class StateManager:
             "state_dir": self.state_dir,
         }
 
+    def get_latest_session_id(self, prefix: str = "pipeline_") -> Optional[str]:
+        """
+        Get the latest session ID with the given prefix from SQLite database.
+        
+        Args:
+            prefix: Session ID prefix to filter by (default: "pipeline_")
+            
+        Returns:
+            Latest session ID or None if not found
+        """
+        try:
+            conn = self._get_connection()
+            try:
+                cursor = conn.execute(
+                    "SELECT session_id FROM session_states WHERE session_id LIKE ? ORDER BY last_saved DESC LIMIT 1",
+                    (f"{prefix}%",)
+                )
+                row = cursor.fetchone()
+                return row[0] if row else None
+            finally:
+                conn.close()
+        except Exception as e:
+            logger.error(f"Error getting latest session ID with prefix '{prefix}': {e}")
+            return None
+
 
 # Global state manager instance
 _state_manager = StateManager()
@@ -348,8 +373,12 @@ def initialize_state(tool_context) -> Dict[str, Any]:
     """
     state_manager = get_state_manager()
     
-    # Try to load existing state
-    session_id = str(id(tool_context.state))
+    # Try to use a context attribute first, then fall back to the globally
+    # active session ID; finally use the state object's id as a last resort
+    from adk_agents.state_manager import get_active_session_id
+    session_id = (getattr(tool_context, 'session_id', None)
+                  or get_active_session_id()
+                  or str(id(tool_context.state)))
     existing_state = state_manager.load_state(session_id)
     
     if existing_state:
@@ -432,10 +461,12 @@ def update_step_progress_state(state: dict, step_name: str, session_id: str, too
         "relationship_detection": 3,
         "drift": 4,
         "drift_detection": 4,
-        "insights": 5,
-        "llm_insights": 5,
-        "reporter": 6,
-        "report_generation": 6,
+        "audit": 5,
+        "audit_data_quality": 5,
+        "insights": 6,
+        "llm_insights": 6,
+        "reporter": 7,
+        "report_generation": 7,
     }
     
     if step_name in step_mapping:
@@ -443,6 +474,10 @@ def update_step_progress_state(state: dict, step_name: str, session_id: str, too
         # Only advance, never regress the current step
         if state.get("current_step", 0) < target_step:
             state["current_step"] = target_step
+        
+        # Ensure total_steps is updated if we reached the end
+        if target_step > state.get("total_steps", 6):
+            state["total_steps"] = target_step
     
     # Optional: sync to tool_context memory
     if tool_context and hasattr(tool_context, "state"):
@@ -478,10 +513,12 @@ def update_step_progress(tool_context, step_name: str) -> None:
         "relationship_detection": 3,
         "drift": 4,
         "drift_detection": 4,
-        "insights": 5,
-        "llm_insights": 5,
-        "reporter": 6,
-        "report_generation": 6,
+        "audit": 5,
+        "audit_data_quality": 5,
+        "insights": 6,
+        "llm_insights": 6,
+        "reporter": 7,
+        "report_generation": 7,
     }
     
     if step_name in step_mapping:
@@ -489,6 +526,10 @@ def update_step_progress(tool_context, step_name: str) -> None:
         # Only advance, never regress the current step
         if tool_context.state.get("current_step", 0) < target_step:
             tool_context.state["current_step"] = target_step
+        
+        # Ensure total_steps is updated
+        if target_step > tool_context.state.get("total_steps", 6):
+            tool_context.state["total_steps"] = target_step
     
     # Save updated state
     save_current_state(tool_context)
