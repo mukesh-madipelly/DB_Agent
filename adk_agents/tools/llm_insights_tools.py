@@ -383,6 +383,7 @@ Rules:
 4. Keep queries efficient.
 5. Return a JSON object with a 'plan' array:
    [{{ "title": "Human Readable Title", "sql": "SELECT ...", "description": "Why this matters" }}]
+6. If the User Goal explicitly asks for a report, metric, or query (e.g., 'top 5 users'), you MUST include a SQL query that directly fulfills this request as one of your planned queries, mapping it to the most relevant tables and columns in the actual schema.
 
 {ref}
 """

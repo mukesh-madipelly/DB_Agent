@@ -7,7 +7,7 @@ except ImportError:
 
 
 # User's high-level business goal for the insights agent
-INSIGHTS_GOAL = os.getenv("INSIGHTS_GOAL", "Analyze the latest license trends and user growth.")
+INSIGHTS_GOAL = os.getenv("INSIGHTS_GOAL", "Give me insights about my database schema and data to help me understand it better and make informed decisions.")
 
 # ============================================
 # ADK Configuration
