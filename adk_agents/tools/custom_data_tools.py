@@ -10,9 +10,15 @@ import re
 import time
 from datetime import datetime, date, time as dt_time
 from google.adk.tools.tool_context import ToolContext
-from adk_agents.tools.connection_tools import get_database_connection
-from adk_agents.state_manager import get_state_manager, get_active_session_id, save_current_state
+from adk_agents.logger import get_logger
+from adk_agents.state_manager import (
+    get_state_manager,
+    get_active_session_id,
+)
+
 import config
+
+logger = get_logger()
 
 
 def _serialize_value(value):
@@ -32,8 +38,7 @@ def _build_schema_reference(schema: dict) -> str:
     lines = ["=== DATABASE SCHEMA ==="]
     for tbl, info in schema.items():
         cols = ", ".join(
-            f'{c.get("name")}({c.get("type", "?")})'
-            for c in info.get("columns", [])
+            f"{c.get('name')}({c.get('type', '?')})" for c in info.get("columns", [])
         )
         lines.append(f'  "{tbl}"  rows:{info.get("row_count", "?")}  cols:[{cols}]')
     return "\n".join(lines)
@@ -93,7 +98,7 @@ Rules:
             # Strip markdown fences if present
             output = re.sub(r"^```(?:json)?", "", output, flags=re.IGNORECASE).strip()
             output = re.sub(r"```$", "", output).strip()
-            
+
             # Parse the JSON to get title and SQL
             try:
                 data = json.loads(output)
@@ -105,13 +110,13 @@ Rules:
         except Exception:
             if attempt == 2:
                 raise
-            time.sleep(2 ** attempt)
+            time.sleep(2**attempt)
 
 
 async def execute_ad_hoc_query(tool_context: ToolContext, question: str) -> dict:
     """Executes a custom data lookup requested by the user.
 
-    This tool takes a natural-language question, generates the SQL automatically 
+    This tool takes a natural-language question, generates the SQL automatically
     using the database schema, and stores results for the final report.
 
     Args:
@@ -121,12 +126,16 @@ async def execute_ad_hoc_query(tool_context: ToolContext, question: str) -> dict
     Returns:
         dict: Status and result summary.
     """
-    print(f"🔧 Tool invocation: execute_ad_hoc_query (Async Turbo Engine active ⚡)")
-    print(f"   - Question: {question}")
-    
-    session_id = (getattr(tool_context, 'session_id', None)
-                  or get_active_session_id()
-                  or str(id(tool_context.state)))
+    logger.info(
+        "🔧 Tool invocation: execute_ad_hoc_query (Async Turbo Engine active ⚡)"
+    )
+    logger.info(f"   - Question: {question}")
+
+    session_id = (
+        getattr(tool_context, "session_id", None)
+        or get_active_session_id()
+        or str(id(tool_context.state))
+    )
 
     state_manager = get_state_manager()
     state = state_manager.load_state(session_id) or {}
@@ -136,29 +145,26 @@ async def execute_ad_hoc_query(tool_context: ToolContext, question: str) -> dict
     if not schema:
         return {
             "status": "error",
-            "message": "No schema found in state. The pipeline must run scan_database_tables first."
+            "message": "No schema found in state. The pipeline must run scan_database_tables first.",
         }
 
     # Step 1: Generate SQL from question using LLM + schema
     schema_ref = _build_schema_reference(schema)
     try:
         title, query = _generate_sql_from_question(question, schema_ref)
-        print(f"   - Generated Title: {title}")
-        print(f"   - Generated SQL: {query}")
+        logger.info(f"   - Generated Title: {title}")
+        logger.info(f"   - Generated SQL: {query}")
     except Exception as e:
-        return {
-            "status": "error",
-            "message": f"Failed to generate SQL: {str(e)}"
-        }
+        return {"status": "error", "message": f"Failed to generate SQL: {str(e)}"}
 
     # Safety check - only allow SELECT or WITH (CTEs)
-    clean_query = re.sub(r'--.*$', '', query, flags=re.MULTILINE)
-    clean_query = re.sub(r'/\*.*?\*/', '', clean_query, flags=re.DOTALL)
-    
+    clean_query = re.sub(r"--.*$", "", query, flags=re.MULTILINE)
+    clean_query = re.sub(r"/\*.*?\*/", "", clean_query, flags=re.DOTALL)
+
     if not re.match(r"^\s*(SELECT|WITH)\b", clean_query, re.IGNORECASE):
         return {
             "status": "error",
-            "message": "Generated query must be a SELECT or WITH statement. Aborting for safety."
+            "message": "Generated query must be a SELECT or WITH statement. Aborting for safety.",
         }
 
     # Step 2: Execute the query securely using appropriate connection
@@ -166,14 +172,17 @@ async def execute_ad_hoc_query(tool_context: ToolContext, question: str) -> dict
         if config.DB_TYPE == "postgresql":
             # Use async operations for PostgreSQL
             from adk_agents.tools.connection_tools import get_async_database_pool
+
             pool = await get_async_database_pool(tool_context)
             async with pool.acquire() as conn:
                 # Enforce Read-Only and set a generous 30s timeout
-                await conn.execute("SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY;")
+                await conn.execute(
+                    "SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY;"
+                )
                 await conn.execute("SET statement_timeout = 30000;")
-                
+
                 rows = await conn.fetch(query)
-                
+
                 # Convert rows to list of dicts with JSON-serializable values
                 results = []
                 for row in rows:
@@ -185,13 +194,14 @@ async def execute_ad_hoc_query(tool_context: ToolContext, question: str) -> dict
         elif config.DB_TYPE == "snowflake":
             # Use sync operations for Snowflake
             from adk_agents.tools.connection_tools import get_database_connection
+
             sync_conn = get_database_connection(tool_context)
             cursor = sync_conn.cursor()
             try:
                 # Execute query with timeout
                 cursor.execute(query)
                 rows = cursor.fetchall()
-                
+
                 # Convert rows to list of dicts with JSON-serializable values
                 results = []
                 column_names = [desc[0] for desc in cursor.description]
@@ -206,10 +216,10 @@ async def execute_ad_hoc_query(tool_context: ToolContext, question: str) -> dict
         else:
             return {
                 "status": "error",
-                "message": f"Unsupported database type: {config.DB_TYPE}"
+                "message": f"Unsupported database type: {config.DB_TYPE}",
             }
 
-        print(f"   ✅ Query returned {len(results)} rows")
+        logger.info(f"   ✅ Query returned {len(results)} rows")
 
         # Store in state for the reporter
         custom_findings = state.get("custom_findings", [])
@@ -218,7 +228,7 @@ async def execute_ad_hoc_query(tool_context: ToolContext, question: str) -> dict
             "description": question,
             "query": query,
             "results": results[:20],  # limit to 20 rows for the report
-            "total_rows_found": len(results)
+            "total_rows_found": len(results),
         }
         custom_findings.append(finding)
         state["custom_findings"] = custom_findings
@@ -229,16 +239,19 @@ async def execute_ad_hoc_query(tool_context: ToolContext, question: str) -> dict
 
         # Save DIRECTLY to disk
         state_manager.save_state(session_id, state)
-        print(f"   💾 Saved custom_findings to state file (session: {session_id})")
+        logger.info(
+            f"   💾 Saved custom_findings to state file (session: {session_id})"
+        )
 
         return {
             "status": "success",
             "message": f"Found {len(results)} rows for: {question}",
             "description": question,
             "row_count": len(results),
-            "preview": results[:5]
+            "preview": results[:5],
         }
 
     except Exception as e:
         from adk_agents.tools.error_utils import log_and_raise_connection_error
+
         log_and_raise_connection_error("Failed to execute custom query", e)

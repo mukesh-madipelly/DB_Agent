@@ -1,6 +1,5 @@
 import asyncpg
 import config
-import asyncio
 
 
 async def create_async_db_pool():
@@ -9,12 +8,14 @@ async def create_async_db_pool():
     Enforces read-only sessions for security.
     """
     if config.DB_TYPE != "postgresql":
-        raise ValueError("Async Turbo Engine currently only supports PostgreSQL (via asyncpg).")
+        raise ValueError(
+            "Async Turbo Engine currently only supports PostgreSQL (via asyncpg)."
+        )
 
     try:
         # Use existing config but adapt for asyncpg
         pg_config = config.POSTGRESQL.copy()
-        
+
         # asyncpg connect params are slightly different from psycopg2
         # It prefers a DSN or kwarg-based connection.
         pool = await asyncpg.create_pool(
@@ -26,12 +27,14 @@ async def create_async_db_pool():
             min_size=1,
             max_size=10,
             # Read-only enforcement via search_path and transaction mode
-            init=setup_readonly_session
+            init=setup_readonly_session,
         )
         return pool
     except Exception as e:
         from adk_agents.tools.error_utils import log_and_raise_connection_error
+
         log_and_raise_connection_error("Failed to create asyncpg pool", e)
+
 
 async def setup_readonly_session(conn):
     """Initializes the session in read-only mode."""

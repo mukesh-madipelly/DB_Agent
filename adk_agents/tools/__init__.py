@@ -17,15 +17,15 @@ from .connection_tools import get_database_connection, establish_database_connec
 from .query_cache import get_query_cache
 
 __all__ = [
-    'scan_database_tables',
-    'analyze_column_statistics',
-    'detect_table_relationships',
-    'detect_schema_changes',
-    'generate_business_insights',
-    'generate_comprehensive_report',
-    'execute_ad_hoc_query',
-    'audit_data_quality',
-    'get_database_connection',
-    'establish_database_connection',
-    'get_query_cache'
+    "scan_database_tables",
+    "analyze_column_statistics",
+    "detect_table_relationships",
+    "detect_schema_changes",
+    "generate_business_insights",
+    "generate_comprehensive_report",
+    "execute_ad_hoc_query",
+    "audit_data_quality",
+    "get_database_connection",
+    "establish_database_connection",
+    "get_query_cache",
 ]

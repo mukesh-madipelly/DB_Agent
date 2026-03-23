@@ -5,9 +5,11 @@ Uses module-level connection cache to avoid pickle errors.
 Connections are keyed by session_id and reused across all tools.
 """
 
-from . import connector
-from . import async_connector
 from google.adk.tools.tool_context import ToolContext
+from . import async_connector, connector
+from adk_agents.logger import get_logger
+
+logger = get_logger()
 
 
 # Module-level connection cache (NOT stored in session state)
@@ -20,6 +22,7 @@ async def get_async_database_pool(tool_context: ToolContext):
     Gets or creates an asynchronous database pool for the current session.
     """
     from adk_agents.state_manager import get_active_session_id
+
     session_id = (
         getattr(tool_context, "session_id", None)
         or get_active_session_id()
@@ -41,21 +44,24 @@ async def get_async_database_pool(tool_context: ToolContext):
 def get_database_connection(tool_context: ToolContext):
     """
     Gets or creates a database connection for the current session.
-    
+
     This helper function manages connections at the module level to avoid
     pickle errors when storing in session state.
-    
+
     Args:
         tool_context: ADK context with session_id
-    
+
     Returns:
         Database connection object
     """
     from adk_agents.state_manager import get_active_session_id
-    session_id = (getattr(tool_context, 'session_id', None)
-                  or get_active_session_id()
-                  or id(tool_context.state))  # Use session_id if available, else state id
-    
+
+    session_id = (
+        getattr(tool_context, "session_id", None)
+        or get_active_session_id()
+        or id(tool_context.state)
+    )  # Use session_id if available, else state id
+
     # Check if connection exists and is alive
     if session_id in _connection_cache:
         conn = _connection_cache[session_id]
@@ -65,29 +71,29 @@ def get_database_connection(tool_context: ToolContext):
             cursor = conn.cursor()
             cursor.execute("SELECT 1")
             return conn
-        except:
+        except Exception:
             # Connection is dead, remove it
             del _connection_cache[session_id]
         finally:
             if cursor:
                 cursor.close()
-    
+
     # Create new connection
     conn = connector.open_database_connection()
     _connection_cache[session_id] = conn
-    
+
     return conn
 
 
 def establish_database_connection(tool_context: ToolContext) -> dict:
     """Establishes a database connection and marks it in session state.
-    
+
     This tool should be called FIRST before any other database tools.
     The actual connection is stored in a module-level cache, not in session state.
-    
+
     Args:
         tool_context (ToolContext): ADK context for accessing session state
-    
+
     Returns:
         dict: Connection status
     """
@@ -96,29 +102,32 @@ def establish_database_connection(tool_context: ToolContext) -> dict:
         if tool_context.state.get("connection_established"):
             return {
                 "status": "success",
-                "message": "Database connection already established and reusing existing connection"
+                "message": "Database connection already established and reusing existing connection",
             }
-        
+
         # Get or create connection (stored in module-level cache)
-        conn = get_database_connection(tool_context)
-        
+        get_database_connection(tool_context)
+
         # Mark as established in state (but don't store the connection object)
         tool_context.state["connection_established"] = True
         from adk_agents.state_manager import save_current_state
+
         save_current_state(tool_context)
-        
+
+        logger.success("Database connection established successfully")
         return {
             "status": "success",
-            "message": "Database connection established successfully"
+            "message": "Database connection established successfully",
         }
-    
+
     except Exception as e:
         from adk_agents.tools.error_utils import log_and_raise_connection_error
+
         log_and_raise_connection_error("Failed to establish database connection", e)
         return {
             "status": "error",
             "error": str(e),
-            "message": f"Failed to establish database connection: {str(e)}"
+            "message": f"Failed to establish database connection: {str(e)}",
         }
 
 
@@ -154,6 +163,7 @@ async def close_database_connection(tool_context: ToolContext) -> dict:
         save_current_state(tool_context)
 
         message = " and ".join(results) or "No active connections found"
+        logger.info(message)
         return {"status": "success", "message": message}
 
     except Exception as e:

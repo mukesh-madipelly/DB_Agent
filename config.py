@@ -1,13 +1,18 @@
 import os
+
 try:
     from dotenv import load_dotenv
+
     load_dotenv()  # Loads from a .env file if present (optional)
 except ImportError:
     pass  # dotenv not installed – env vars / defaults will be used
 
 
 # User's high-level business goal for the insights agent
-INSIGHTS_GOAL = os.getenv("INSIGHTS_GOAL", "Give me insights about my database schema and data to help me understand it better and make informed decisions.")
+INSIGHTS_GOAL = os.getenv(
+    "INSIGHTS_GOAL",
+    "Give me insights about my database schema and data to help me understand it better and make informed decisions.",
+)
 
 # ============================================
 # ADK Configuration
@@ -37,22 +42,22 @@ DB_TYPE = os.getenv("DB_TYPE", "postgresql")
 
 # Snowflake settings
 SNOWFLAKE = {
-    "account":   os.getenv("SF_ACCOUNT", ""),
-    "user":      os.getenv("SF_USER", ""),
-    "password":  os.getenv("SF_PASSWORD", ""),
-    "database":  os.getenv("SF_DATABASE", ""),
-    "schema":    os.getenv("SF_SCHEMA", ""),
+    "account": os.getenv("SF_ACCOUNT", ""),
+    "user": os.getenv("SF_USER", ""),
+    "password": os.getenv("SF_PASSWORD", ""),
+    "database": os.getenv("SF_DATABASE", ""),
+    "schema": os.getenv("SF_SCHEMA", ""),
     "warehouse": os.getenv("SF_WAREHOUSE", ""),
-    "role":      os.getenv("SF_ROLE", ""),
+    "role": os.getenv("SF_ROLE", ""),
 }
 
 # PostgreSQL settings
 POSTGRESQL = {
-    "host":     os.getenv("DB_HOST", "localhost"),
-    "port":     int(os.getenv("DB_PORT", "5432")),
-    "user":     os.getenv("DB_USER", ""),
+    "host": os.getenv("DB_HOST", "localhost"),
+    "port": int(os.getenv("DB_PORT", "5432")),
+    "user": os.getenv("DB_USER", ""),
     "password": os.getenv("DB_PASSWORD", ""),
-    "dbname":   os.getenv("DB_NAME", ""),
+    "dbname": os.getenv("DB_NAME", ""),
 }
 
 # PostgreSQL schema to scan
@@ -97,5 +102,3 @@ REPORT_DIR = os.getenv("REPORT_DIR", "reports")
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "gemini")
 GEMINI_API_KEY = GOOGLE_API_KEY
 LLM_MODEL = ADK_MODEL
-
-

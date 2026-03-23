@@ -8,16 +8,16 @@ It manages user interaction and delegates specialized tasks to sub-agents.
 from google.adk.agents import Agent
 from adk_agents.agents.pipeline_agent import create_adaptive_pipeline_agent
 import config
-from adk_agents.tools import error_utils
+
 
 def create_root_agent() -> Agent:
     """
     Creates the root interactive agent.
     It manages user intent and delegates to specialized sub-agents.
     """
-    
+
     pipeline_agent = create_adaptive_pipeline_agent()
-    
+
     # Root agent — Interactive interface
     root_agent = Agent(
         name="root_agent",
@@ -41,10 +41,11 @@ def create_root_agent() -> Agent:
         ## PRIVACY & SAFETY
         - Always respect the read-only constraints of the underlying tools.
         """,
-        sub_agents=[pipeline_agent]
+        sub_agents=[pipeline_agent],
     )
-    
+
     return root_agent
+
 
 # Export the agent creation function
 __all__ = ["create_root_agent"]

@@ -8,17 +8,17 @@ from adk_agents.tools import (
     generate_business_insights,
     generate_comprehensive_report,
     execute_ad_hoc_query,
-    error_utils,
     audit_data_quality,
-    establish_database_connection
+    establish_database_connection,
 )
+
 
 def create_adaptive_pipeline_agent() -> LlmAgent:
     """
-    Creates a 'Master Orchestrator' agent that intelligently manages the 
+    Creates a 'Master Orchestrator' agent that intelligently manages the
     database intelligence pipeline and handles ad-hoc user requests.
     """
-    
+
     agent = LlmAgent(
         name="adaptive_pipeline",
         description="Master orchestrator for database intelligence analysis and reporting.",
@@ -32,7 +32,7 @@ def create_adaptive_pipeline_agent() -> LlmAgent:
             generate_business_insights,
             generate_comprehensive_report,
             execute_ad_hoc_query,
-            audit_data_quality
+            audit_data_quality,
         ],
         instruction="""
         You are the Master Database Architect. Your goal is to provide a comprehensive, up-to-date analysis of the database.
@@ -56,7 +56,7 @@ def create_adaptive_pipeline_agent() -> LlmAgent:
         - Do NOT skip Steps 0-5 based on state flags. ALWAYS re-run them for real-time accuracy.
         - If a tool fails, use error_utils to log and raise the error, but try to proceed with subsequent mandatory steps.
         - Only call `generate_comprehensive_report` once at the very end.
-        """
+        """,
     )
-    
+
     return agent
